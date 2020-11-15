@@ -1,0 +1,63 @@
+import "tfplan/v2" as tfplan
+
+
+find_resources_with_standard_tags = func() {
+  resources = filter tfplan.resource_changes as address, rc {
+    rc.provider_name is "aws" and
+    rc.type not in ["aws_autoscaling_group"] and
+  	rc.mode is "managed" and
+  	(rc.change.actions contains "create" or rc.change.actions contains "update")
+  }
+
+  return resources
+}
+
+filter_attribute_not_contains_list = func(resources, attr, required, prtmsg) {
+  violators = {}
+  messages = {}
+  for resources as address, rc {
+    # Evaluate the value (v) of the attribute
+    v = evaluate_attribute(rc, attr) else null
+    # Check if the value contains the desired allowed list
+    if v is null or
+       not (types.type_of(v) is "list" or types.type_of(v) is "map") {
+      # Add the resource and a warning message to the violators list
+      message = to_string(address) + " has " + to_string(attr) +
+                " that is missing, null, or is not a map or a list"
+      violators[address] = rc
+      messages[address] = message
+      if prtmsg {
+        print(message)
+      }
+    } else {
+      missing_values = []
+      for required as rv {
+        if v not contains rv {
+          append(missing_values, rv)
+        } // end if
+      } // end for required
+      if length(missing_values) > 0 {
+        # Build warning message when v is a map
+        message = to_string(address) + " has " + to_string(attr) + " " +
+                  to_string(v) + " that is missing the required items " +
+                  to_string(missing_values) + " from the list: " +
+                  to_string(required)
+        # Add the resource and warning message to the violators list
+        violators[address] = rc
+        messages[address] = message
+        if prtmsg {
+          print(message)
+        }
+      } // end length(missing_values)
+    } // end else v not null
+  } // end for
+  return {"resources":violators,"messages":messages}
+}
+
+requiredTags = ["Owner", "Project"]
+allResourcesWithStandardTags = find_resources_with_standard_tags()
+violation = filter_attribute_not_contains_list(allResourcesWithStandardTags, "tags", requiredTags, true)
+
+main = rule {
+    length(violation["messages"]) == 0
+}
